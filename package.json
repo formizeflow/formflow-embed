@@ -1,0 +1,20 @@
+{
+  "name": "@formizeflow/embed",
+  "version": "2.1.0",
+  "description": "FormFlow embed script (no dependencies, no cookies): inline, popup, modal, drawer, slider, fullscreen, floating and popover forms.",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/formizeflow/formflow-embed.git" },
+  "homepage": "https://github.com/formizeflow/formflow-embed#readme",
+  "main": "embed.js",
+  "browser": "embed.js",
+  "unpkg": "embed.js",
+  "jsdelivr": "embed.js",
+  "types": "index.d.ts",
+  "files": ["embed.js", "index.d.ts", "README.md", "LICENSE"],
+  "scripts": {
+    "typecheck": "node --check embed.js && tsc --noEmit --strict --lib ES2020,DOM index.d.ts",
+    "test": "node test.mjs"
+  },
+  "devDependencies": { "typescript": "^5.7.0" },
+  "publishConfig": { "access": "public", "provenance": true }
+}
