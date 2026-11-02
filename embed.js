@@ -15,7 +15,7 @@
     if (currentScript.getAttribute("data-workspace")) defaults.workspace = currentScript.getAttribute("data-workspace");
   }
 
-  var MODES = ["inline", "popup", "modal", "drawer", "fullscreen", "floating", "popover", "slider"];
+  var MODES = ["inline", "popup", "modal", "drawer", "fullscreen", "floating", "popover", "slider", "sidetab"];
   var widgets = [];          // live widgets (for the message router)
   var activeOverlay = null;  // widget with an open overlay (FormFlow.close())
   var scanned = typeof WeakSet === "function" ? new WeakSet() : null;
@@ -96,6 +96,8 @@
     themeFor(w, function (c) {
       if (c.background) ph.style.background = c.background;
       bars.forEach(function (b) { b.style.background = c.muted || c.border || c.text || "#cbd5e1"; b.style.opacity = ".3"; });
+      if (w.opts.transparent) ph.style.background = "transparent";
+      if (/^#[0-9a-f]{3,8}$/i.test(w.opts.loaderColor || "")) bars.forEach(function (b) { b.style.background = w.opts.loaderColor; });
     });
   }
 
@@ -146,6 +148,9 @@
         if (pass === true || (Array.isArray(pass) && pass.indexOf(k) >= 0)) p.set(k, v);
       });
     }
+    if (o.hideHeader) p.set("hideHeader", "1");
+    if (o.hideFooter) p.set("hideFooter", "1");
+    if (o.transparent) p.set("transparent", "1");
     if (extra && extra.close) p.set("close", "1");
     return u.toString();
   }
@@ -295,6 +300,7 @@
     var o = merge(defaults, opts || {});
     o.baseUrl = (o.baseUrl || defaults.baseUrl).replace(/\/$/, "");
     if (MODES.indexOf(o.mode) < 0) o.mode = "inline";
+    if (o.mode === "sidetab") { o.mode = "slider"; o.sideTab = true; }
     return o;
   }
 
@@ -312,7 +318,11 @@
         boxShadow: fixed ? "0 6px 20px rgba(0,0,0,.3)" : "none",
       });
       if (fixed) Object.assign(b.style, merge({ position: "fixed", bottom: "20px", zIndex: "2147482999" }, s.position === "bottom-left" ? { left: "20px" } : { right: "20px" }));
-      b.textContent = o.buttonText || (fixed ? "Feedback" : "Open form");
+      if (o.sideTab) { // vertical tab on the screen edge that opens the slider
+        var L = s.side === "left";
+        Object.assign(b.style, { position: "fixed", top: "50%", bottom: "auto", left: L ? "0" : "auto", right: L ? "auto" : "0", transform: "translateY(-50%)", writingMode: "vertical-rl", minHeight: "0", padding: "18px 12px", borderRadius: L ? "0 10px 10px 0" : "10px 0 0 10px", boxShadow: "0 4px 16px rgba(0,0,0,.25)", zIndex: "2147482999" });
+      }
+      b.textContent = o.buttonText || (fixed || o.sideTab ? "Feedback" : "Open form");
       return b;
     }
 
@@ -337,7 +347,7 @@
       w.open();
       return w;
     }
-    var floating = o.mode === "floating";
+    var floating = o.mode === "floating" || !!o.sideTab;
     var btn = useBubble ? bubble(o, w) : button(floating);
     var showButton = !(o.trigger && !o.launcher && o.mode === "popover");
     if (showButton && !useBubble) (floating ? doc.body : el).appendChild(btn);
@@ -458,6 +468,12 @@
     if (g("prefill-from-url") === "true") o.prefillFromUrl = true;
     if (g("auto-close")) o.autoClose = Number(g("auto-close")) || true;
     if (g("placeholder") === "false") o.placeholder = false;
+    if (g("hide-header") === "true") o.hideHeader = true;
+    if (g("hide-footer") === "true") o.hideFooter = true;
+    if (g("transparent") === "true") o.transparent = true;
+    if (g("loader-color")) o.loaderColor = g("loader-color");
+    if (g("auto-height") === "false") o.autoResize = false;
+    if (g("side")) o.styles = { side: g("side") };
     if (g("launcher-icon") || g("launcher-tooltip")) o.launcher = { icon: g("launcher-icon") || undefined, tooltip: g("launcher-tooltip") || undefined };
     if (g("trigger-exit-intent") === "true" || g("trigger-scroll") || g("trigger-delay")) {
       o.trigger = {};
@@ -465,7 +481,7 @@
       if (g("trigger-scroll")) o.trigger.scrollPercent = Number(g("trigger-scroll"));
       if (g("trigger-delay")) o.trigger.delay = Number(g("trigger-delay"));
     }
-    o.styles = {};
+    o.styles = o.styles || {};
     if (g("width")) o.styles.width = g("width");
     if (g("height")) o.styles.height = g("height");
     if (g("button-color")) o.styles.buttonColor = g("button-color");

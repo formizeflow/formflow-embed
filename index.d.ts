@@ -1,5 +1,5 @@
 /** Type declarations for public/embed.js (the hand-written SDK, version 2.1.0). v1 options and the postMessage protocol are unchanged. */
-export type EmbedMode = "inline" | "popup" | "modal" | "drawer" | "slider" | "fullscreen" | "floating" | "popover";
+export type EmbedMode = "inline" | "popup" | "modal" | "drawer" | "slider" | "fullscreen" | "floating" | "popover" | "sidetab";
 export type EmbedStyles = {
   width?: string | number; height?: string | number; buttonColor?: string;
   position?: "bottom-right" | "bottom-left";
@@ -45,6 +45,14 @@ export type EmbedOptions = {
   trigger?: EmbedTrigger;
   /** Set false to skip the theme-matched loading skeleton. */
   placeholder?: boolean;
+  /** Hide the form header/hero band. */
+  hideHeader?: boolean;
+  /** Hide the footer branding. */
+  hideFooter?: boolean;
+  /** Transparent page background so the form blends into the host page. */
+  transparent?: boolean;
+  /** Colour (#hex) of the loading skeleton. */
+  loaderColor?: string;
   respondent?: Record<string, string | number | boolean>;
   /** Stable user id of your product; the server uses it for experiments and resume. Defaults to the id passed to identify(). */
   uid?: string;

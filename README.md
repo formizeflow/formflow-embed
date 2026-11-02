@@ -117,3 +117,7 @@ Options on `open`/`createWidget`: `uid`, `uidSignature` (compute the HMAC on you
 - Appearance params: `scheme=light|dark|system`, `accent=#rrggbb`, `font=<family>`.
 - `resume=0` disables server-side resume for a uid (default on, implemented server-side).
 - No schema change was made; the "app action" is a link convention.
+
+## v2.2: visual flags (additive)
+
+Options (also `data-hide-header`, `data-hide-footer`, `data-transparent`, `data-loader-color`, `data-auto-height="false"`, `data-side`): `hideHeader`, `hideFooter`, `transparent` (page background becomes transparent), `loaderColor` (#hex skeleton colour) and `autoResize` (height follows content; default on). They map to the `/embed/:slug` URL params `hideHeader=1`, `hideFooter=1`, `transparent=1`. New mode `sidetab`: a vertical tab on the screen edge (`styles.side` left or right) that opens the slider panel.
