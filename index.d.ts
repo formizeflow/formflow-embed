@@ -1,4 +1,4 @@
-/** Type declarations for public/embed.js (the hand-written SDK, version 2.1.0). v1 options and the postMessage protocol are unchanged. */
+/** Type declarations for public/embed.js (the hand-written SDK, version 2.3.0; also published at /embed.d.ts). v1 options and the postMessage protocol are unchanged. */
 export type EmbedMode = "inline" | "popup" | "modal" | "drawer" | "slider" | "fullscreen" | "floating" | "popover" | "sidetab";
 export type EmbedStyles = {
   width?: string | number; height?: string | number; buttonColor?: string;
@@ -30,6 +30,11 @@ export type EmbedTrigger = {
 export type EmbedOptions = {
   mode?: EmbedMode;
   baseUrl?: string;
+  /** Form language, passed to the frame as ?lang=. */
+  locale?: string;
+  lang?: string;
+  /** Initial statistics consent: true | false | "granted" | "denied" | { statistics }. Default: Cookie Munch's decision if present, else undecided (events held). */
+  consent?: boolean | "granted" | "denied" | { statistics: boolean };
   prefill?: Record<string, string | number | boolean>;
   hidden?: Record<string, string | number | boolean>;
   /** Copy host-page query params to the form: true (all), an allow-list, or v1's passQueryParams. */
@@ -58,12 +63,23 @@ export type EmbedOptions = {
   uid?: string;
   /** HMAC signature of uid computed on YOUR server (never in the browser). */
   uidSignature?: string;
+  /** An Atlas session JWT as proof of `uid` (instead of `uidSignature`); the server verifies it against the workspace's linked Atlas. Script attribute: data-atlas-token. */
+  atlasToken?: string;
+  /** Test traffic (integration tests): not counted as an experiment exposure or conversion. Script attribute: data-test="true". */
+  test?: boolean;
+  /** Show a Skip control inside the form. Skip fires onSkip, then goes to returnUrl (with ff_skipped=1). Script attribute: data-skippable="true". */
+  skippable?: boolean;
+  /** Where the top window goes when the form is completed (?ff_done=1) or skipped (?ff_skipped=1). http(s) or a path on the host site. Script attribute: data-return-url. */
+  returnUrl?: string;
   /** User attributes, sent as attrs.<key>. */
   attributes?: Record<string, string | number | boolean>;
   /** Read window.posthog for the session and distinct id. */
   posthog?: boolean;
   posthogSessionId?: string;
   posthogDistinctId?: string;
+  /** Generic ids (Lucida or another tool), used when the posthog ones are absent. */
+  analyticsSessionId?: string;
+  analyticsDistinctId?: string;
   autoResize?: boolean;
   buttonText?: string;
   title?: string;
@@ -74,18 +90,26 @@ export type EmbedOptions = {
   onError?: (data: { message: string }) => void;
   /** The visitor is in a test's holdout, so no form is shown. Default: the embed is removed (inline) or closed (overlays). */
   onHoldout?: (data: { experimentId: string; redirectUrl?: string }) => void;
+  /** The ending redirects after its delay (ending.redirectDelaySec). Default: the host page navigates to the address. */
+  onRedirect?: (data: { url: string; target: "top" | "blank" | "self" }) => void;
   onClose?: () => void;
+  /** The visitor pressed Skip (needs `skippable`). Without a handler or returnUrl the embed closes. */
+  onSkip?: (data: Record<string, never>) => void;
 };
 export type EmbedWidget = { iframe: HTMLIFrameElement | null; open(): void; close(): void; destroy(): void };
 export interface FormFlowGlobal {
-  version: "2.1.0";
+  version: "2.3.0";
+  /** Statistics consent. Forwarded events are held until a grant; a decline drops them. */
+  setConsent(c: boolean | { statistics: boolean }): void;
   init(opts?: { baseUrl?: string; workspace?: string; widget?: EmbedOptions }): void;
   open(slug: string, opts?: EmbedOptions): EmbedWidget;
   close(): void;
   createWidget(el: HTMLElement, slug: string, opts?: EmbedOptions): EmbedWidget;
   identify(userId: string | number, attributes?: Record<string, string | number | boolean | null>): void;
   track(event: string): void;
-  decide(opts: { entry: string; uid?: string; uidSignature?: string; attributes?: Record<string, string | number | boolean>; baseUrl?: string; timeoutMs?: number; posthog?: boolean; posthogSessionId?: string; posthogDistinctId?: string }): Promise<OnboardingDecision>;
+  /** Report a goal for a signed-in person without a secret key (POST /api/v1/public/experiments/{entry}/conversions). */
+  convert(event: string, opts: { entry: string; uid?: string; uidSignature?: string; atlasToken?: string; eventId?: string; baseUrl?: string; test?: boolean }): Promise<unknown>;
+  decide(opts: { entry: string; uid?: string; uidSignature?: string; atlasToken?: string; test?: boolean; attributes?: Record<string, string | number | boolean>; baseUrl?: string; timeoutMs?: number; posthog?: boolean; posthogSessionId?: string; posthogDistinctId?: string; analyticsSessionId?: string; analyticsDistinctId?: string }): Promise<OnboardingDecision>;
 }
 declare global { interface Window { FormFlow?: FormFlowGlobal; dataLayer?: unknown[] } }
 
@@ -99,6 +123,9 @@ export type NativeEvent =
   | { type: "complete" | "submit"; data: { submissionId: string; queued?: boolean; outcome: { passed?: boolean; outcomeId?: string; endingId?: string }; endingId?: string; durationMs?: number } }
   | { type: "progress"; data: { step: number; total: number; percent: number } }
   | { type: "resize"; data: { height: number } }
+  | { type: "skip"; data: Record<string, never> }
+  /** `route` is the ending's ctaRoute (an in-app path); `url` is empty when only a route is set. Custom-scheme urls (myapp://x) only travel in native mode. */
+  | { type: "redirect"; data: { url: string; route?: string; target: "top" | "blank" | "self" } }
   | { type: "error"; data: { message: string } };
 export type NativeMessage = NativeEvent & { source: "formflow"; formId: string };
 

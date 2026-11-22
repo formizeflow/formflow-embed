@@ -19,13 +19,13 @@ Attributes: `data-formflow` (slug), `data-mode` (inline, popup, modal, drawer, s
 - `FormFlow.createWidget(el, slug, opts)` returns `{ iframe, open, close, destroy }`.
 - `FormFlow.identify(userId, attributes)` and `FormFlow.track(eventName)` feed the targeting rules.
 
-Options: `mode`, `baseUrl`, `prefill`, `hidden`, `passQueryParams` (`true` or an allow-list of query keys), `autoResize`, `onReady`, `onSubmit`, `onProgress`, `onError`, `onHoldout`, `onClose`, `styles: { width, height, buttonColor, position: "bottom-right" | "bottom-left" }`.
+Options: `locale` (form language, sent as `?lang=`), `consent` (`true|false|"granted"|"denied"|{statistics}`; also `FormFlow.setConsent({statistics})`, and Cookie Munch is followed automatically; forwarded events are held until a grant), `mode`, `baseUrl`, `prefill`, `hidden`, `passQueryParams` (`true` or an allow-list of query keys), `autoResize`, `onReady`, `onSubmit`, `onProgress`, `onError`, `onHoldout`, `onClose`, `styles: { width, height, buttonColor, position: "bottom-right" | "bottom-left" }`.
 
 Modal, drawer, popup and fullscreen trap focus, close on Escape and restore focus. The floating button is a real `<button>` with `aria-expanded`.
 
 ## postMessage protocol (iframe to host)
 
-`{ source: "formflow", type: "ready" | "resize" | "progress" | "submit" | "error" | "close", formId, data }`, always posted to the origin given in `?origin=`. The SDK accepts only messages whose `origin` equals the `baseUrl` origin, whose `source` is `"formflow"`, and that come from its own iframe. `submit` carries `{ submissionId, outcome: { passed, outcomeId, endingId } }`, never answers.
+`{ source: "formflow", type: "ready" | "resize" | "progress" | "submit" | "redirect" | "error" | "close", formId, data }`, always posted to the origin given in `?origin=`. The SDK accepts only messages whose `origin` equals the `baseUrl` origin, whose `source` is `"formflow"`, and that come from its own iframe. `submit` carries `{ submissionId, outcome: { passed, outcomeId, endingId } }`, never answers. `redirect` carries `{ url }` when the ending redirects (after `ending.redirectDelaySec`, default 5 s): `onRedirect({ url, target })` decides (`target`: `top`, `blank`, `self`); without it the SDK navigates the host page to the address, so the frame itself never navigates.
 
 URL parameters on `/embed/:slug`: `origin`, `prefill.<fieldId>`, `hidden.<name>`, `respondent.<attr>`, `close=1`, `lang`, plus any pass-through query params (UTM etc.).
 
@@ -94,6 +94,8 @@ Envelope: `{ source: "formflow", type, formId, data }`. Native mode events:
 - `step` `{ index, fieldId, total }` (`fieldId` is the most recently answered field)
 - `answer` `{ fieldId, type }`, plus `value` only when the URL has `answers=1` and the field is not sensitive (never file uploads or signatures)
 - `complete` `{ submissionId, outcome, endingId, durationMs }` (also sent as `submit`)
+- `redirect` `{ url, route?, target }` (the ending redirects or its button was tapped; the app opens the address, or navigates in-app to `route` when the ending sets `ctaRoute`; `url` is empty when only a route is set; custom-scheme urls such as `myapp://tool/x` appear only in native mode)
+- `skip` `{}` (`skippable=1` in the URL shows a Skip control; with `return_url=` the app also gets a `redirect` to it with `ff_skipped=1` or `ff_done=1`)
 - `progress`, `resize`, `error`, and `close` (the user tapped the close button, `close=1`)
 
 Other URL params (all optional): `uid` (the app's stable user id) and `variant` (force an experiment variant id), which the server uses; `lang`, `prefill.<fieldId>`, `hidden.<name>`, `respondent.<attr>`.
@@ -106,7 +108,7 @@ Native SDKs: `sdks/react-native`, `sdks/ios`, `sdks/android`, `sdks/flutter`.
 
 ## v2.1: identity and decide
 
-Options on `open`/`createWidget`: `uid`, `uidSignature` (compute the HMAC on your server), `attributes` (sent as `attrs.<key>`), `posthog: true` (reads `window.posthog` session and distinct ids) or `posthogSessionId`/`posthogDistinctId`. URL params: `uid`, `uid_sig`, `attrs.<k>`, `ph_session`, `ph_distinct`.
+Options on `open`/`createWidget`: `uid`, `uidSignature` (compute the HMAC on your server), `attributes` (sent as `attrs.<key>`), `posthog: true` (reads `window.posthog` session and distinct ids) or `posthogSessionId`/`posthogDistinctId`, or the generic `analyticsSessionId`/`analyticsDistinctId` (used for Lucida and others when the posthog ones are absent). URL params: `uid`, `uid_sig`, `attrs.<k>`, `ph_session`, `ph_distinct`.
 
 `FormFlow.decide({ entry, uid, uidSignature, attributes })` calls `POST /api/v1/public/onboarding/decide` and resolves `{ show, experimentId, variantId, formId, slug, versionId, reason, definition?, resume? }`. Use `show: false` for holdouts (an "excluded" visitor, outside the test's traffic or targeting, gets `show: true` with the original form and no experiment id, the same as the hosted page), then open `slug` with `variant`.
 
@@ -121,3 +123,13 @@ Options on `open`/`createWidget`: `uid`, `uidSignature` (compute the HMAC on you
 ## v2.2: visual flags (additive)
 
 Options (also `data-hide-header`, `data-hide-footer`, `data-transparent`, `data-loader-color`, `data-auto-height="false"`, `data-side`): `hideHeader`, `hideFooter`, `transparent` (page background becomes transparent), `loaderColor` (#hex skeleton colour) and `autoResize` (height follows content; default on). They map to the `/embed/:slug` URL params `hideHeader=1`, `hideFooter=1`, `transparent=1`. New mode `sidetab`: a vertical tab on the screen edge (`styles.side` left or right) that opens the slider panel.
+
+## Skip, return URL, goals, Atlas, test traffic (2.3.0)
+
+- `skippable: true` (`data-skippable="true"`) shows a Skip control in the form. Skip posts a `skip` message and fires `onSkip`. `returnUrl` (`data-return-url`) sends the top window there after completion (`?ff_done=1`) or skip (`?ff_skipped=1`); http(s) or a path on your site only. With no `onSkip` and no `returnUrl`, Skip closes the embed.
+- `FormFlow.convert(event, { entry, uid, uidSignature, eventId })` reports a goal: `POST /api/v1/public/experiments/{entry}/conversions`, signed by the uid, no secret key.
+- `atlasToken` (`data-atlas-token`): an Atlas session JWT as proof of `uid` instead of `uidSignature`. Sent as `atlas_token`.
+- `test: true` (`data-test="true"`): sent as `test=1`; the visit is not an exposure or a conversion.
+- Errors: if `window.watchtower` (or `window.Watchtower`) exists, form load failures, form errors and failed decide/convert calls are reported with `captureError`. Nothing throws without it.
+- Native bridge: `skip` message; `redirect` carries `data.route` (the ending's `ctaRoute`), and `ctaUrl` may use a custom scheme in `native=1` only.
+- Types: https://your-host/embed.d.ts (a copy of `types.d.ts`).

@@ -1,7 +1,7 @@
-/*! FormFlow embed SDK v2.1.0 | hand-written ES2017 IIFE; keep in sync with src/sdk/embed/types.d.ts and README.md */
+/*! FormFlow embed SDK v2.3.0 | hand-written ES2017 IIFE; keep in sync with src/sdk/embed/types.d.ts and README.md */
 (function (global) {
   "use strict";
-  var VERSION = "2.1.0";
+  var VERSION = "2.3.0";
   var doc = global.document;
   if (!doc || (global.FormFlow && global.FormFlow.version === VERSION)) return;
 
@@ -30,6 +30,24 @@
   function css(v, fallback) { return typeof v === "number" ? v + "px" : v || fallback; }
   function merge() { return Object.assign.apply(null, [{}].concat([].slice.call(arguments))); }
   function noop() {}
+  // Errors go to the host page's Watchtower RUM when it exposes one (init({ exposeGlobal: true }) sets window.watchtower). Never throws.
+  function report(err, ctx) {
+    try {
+      var wt = global.watchtower || global.Watchtower;
+      if (wt && typeof wt.captureError === "function") wt.captureError(err instanceof Error ? err : new Error(String(err)), merge({ source: "formflow-embed", sdk: VERSION }, ctx || {}));
+    } catch (e) { /* monitoring must never break the page */ }
+  }
+  // returnUrl (+ ff_done=1 / ff_skipped=1): http(s) or a path on this site; anything else is ignored.
+  function goReturn(o, flag) {
+    if (!o.returnUrl) return false;
+    try {
+      var u = new URL(o.returnUrl, global.location.href);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+      u.searchParams.set(flag, "1");
+      global.location.assign(u.toString());
+      return true;
+    } catch (e) { return false; }
+  }
 
   /* ---------- prefill sources on the host page ---------- */
   // prefillFromUrl: true (every host query param) | ["email","plan"] | { fieldId: "paramName" }
@@ -102,15 +120,16 @@
   }
 
   /* ---------- identity (uid, signature, attributes, PostHog link) ---------- */
-  // Options: uid, uidSignature (HMAC from YOUR server), attributes, posthog:true (read window.posthog), posthogSessionId, posthogDistinctId.
+  // Options: uid, uidSignature (HMAC from YOUR server), attributes, posthog:true (read window.posthog), posthogSessionId, posthogDistinctId, analyticsSessionId, analyticsDistinctId.
   function identity(o) {
     var out = [];
     var uid = o.uid != null ? o.uid : sv.userId;
     if (uid != null) out.push(["uid", String(uid)]);
     if (o.uidSignature) out.push(["uid_sig", String(o.uidSignature)]);
+    if (o.atlasToken) out.push(["atlas_token", String(o.atlasToken)]); // an Atlas session JWT as proof of uid (instead of uidSignature)
     var attrs = merge(sv.attrs || {}, o.attributes || {});
     Object.keys(attrs).forEach(function (k) { if (attrs[k] != null) out.push(["attrs." + k, String(attrs[k])]); });
-    var ph = o.posthog ? global.posthog : null, sid = o.posthogSessionId, did = o.posthogDistinctId;
+    var ph = o.posthog ? global.posthog : null, sid = o.posthogSessionId || o.analyticsSessionId, did = o.posthogDistinctId || o.analyticsDistinctId;
     try {
       if (ph) {
         if (!sid && ph.get_session_id) sid = ph.get_session_id();
@@ -122,12 +141,38 @@
     return out;
   }
 
+  /* ---------- statistics consent ---------- */
+  // Forwarded events (Lucida, PostHog, ...) are held until a grant. Sources, first that has an answer wins:
+  // FormFlow.setConsent(), the widget's `consent` option (true | false | "granted" | "denied" | {statistics}), Cookie Munch's window.CookieMunch.consent.
+  var hostConsent;
+  function toState(v) {
+    if (v && typeof v === "object") v = v.statistics;
+    return v === true || v === "granted" ? "granted" : v === false || v === "denied" ? "denied" : "pending";
+  }
+  function consentOf(o) {
+    if (hostConsent !== undefined) return hostConsent;
+    if (o.consent !== undefined) return toState(o.consent);
+    var cm = global.CookieMunch && global.CookieMunch.consent; // a stored decision; null before the visitor decides
+    if (cm) return cm.statistics === true || (cm.custom && cm.custom.statistics === true) ? "granted" : "denied";
+    return "pending";
+  }
+  function pushConsent(w) {
+    if (w.iframe && w.iframe.contentWindow) {
+      var s = consentOf(w.opts);
+      if (s !== "pending") w.iframe.contentWindow.postMessage({ source: "formflow-host", type: "consent", statistics: s === "granted" }, w.origin);
+    }
+  }
+  function pushAll() { widgets.forEach(pushConsent); }
+  global.addEventListener("CookieMunchOnChange", pushAll);
+
   /* ---------- URL building ---------- */
   function buildSrc(slug, o, extra) {
     var u = new URL(o.baseUrl.replace(/\/$/, "") + "/embed/" + encodeURIComponent(slug));
     var p = u.searchParams;
     p.set("origin", global.location.origin);
     p.set("sdk", VERSION);
+    p.set("consent", consentOf(o));
+    if (o.locale || o.lang) p.set("lang", o.locale || o.lang);
     var put = function (prefix, obj) {
       Object.keys(obj || {}).forEach(function (k) {
         var v = obj[k];
@@ -148,6 +193,8 @@
         if (pass === true || (Array.isArray(pass) && pass.indexOf(k) >= 0)) p.set(k, v);
       });
     }
+    if (o.skippable) p.set("skippable", "1");
+    if (o.test) p.set("test", "1"); // test traffic: not counted as an exposure or a conversion
     if (o.hideHeader) p.set("hideHeader", "1");
     if (o.hideFooter) p.set("hideFooter", "1");
     if (o.transparent) p.set("transparent", "1");
@@ -175,20 +222,35 @@
       handle: function (d) {
         var data = d.data || {};
         switch (d.type) {
-          case "ready": if (w.hidePlaceholder) w.hidePlaceholder(); (o.onReady || noop)(data); break;
+          case "ready": w.ready = true; if (w.hidePlaceholder) w.hidePlaceholder(); pushConsent(w); (o.onReady || noop)(data); break;
           case "resize":
             if (o.autoResize !== false && typeof data.height === "number") w.resize(Math.max(120, Math.min(data.height, 20000)));
             break;
           case "progress": (o.onProgress || noop)(data); break;
           case "submit":
             (o.onSubmit || noop)(data);
+            if (o.returnUrl) { global.setTimeout(function () { goReturn(o, "ff_done"); }, typeof o.autoClose === "number" ? o.autoClose : o.autoClose ? 3000 : 0); break; }
             if (o.autoClose && w.overlay) global.setTimeout(function () { w.close(); }, typeof o.autoClose === "number" ? o.autoClose : 3000);
             break;
-          case "error": (o.onError || noop)(data); break;
+          case "error": report(new Error(data.message || "form error"), { slug: slug, kind: "submit" }); (o.onError || noop)(data); break;
+          // the visitor skipped: onSkip, then returnUrl (?ff_skipped=1); with neither the embed closes
+          case "skip":
+            (o.onSkip || noop)(data);
+            if (!goReturn(o, "ff_skipped") && !o.onSkip) { if (w.overlay) w.close(); else w.destroy(); }
+            break;
           // the visitor is in a test's holdout: no form. Without a handler the embed is removed (inline) or closed (overlays).
           case "holdout":
             if (o.onHoldout) o.onHoldout({ experimentId: d.experimentId || data.experimentId, redirectUrl: data.redirectUrl });
             else if (w.overlay) w.close(); else w.destroy();
+            break;
+          // the ending asks to leave the form: the host page decides; without a handler the page itself follows an http(s) address
+          case "redirect":
+            // data.target: "top" (default, navigate the page), "blank" (new tab) or "self" (the frame itself; hosts that allow framing)
+            if (o.onRedirect) o.onRedirect({ url: data.url, target: data.target || "top" });
+            else if (typeof data.url === "string" && /^https?:\/\//.test(data.url)) {
+              if (data.target === "blank") global.open(data.url, "_blank", "noopener");
+              else if (data.target !== "self") global.location.assign(data.url); // "self": the frame navigates itself
+            }
             break;
           case "close": w.close(); break;
         }
@@ -205,6 +267,7 @@
       allow: "geolocation; camera; clipboard-write", referrerpolicy: "strict-origin-when-cross-origin",
     }, { border: "0", width: "100%", display: "block", background: "transparent", colorScheme: "normal" });
     w.iframe = f;
+    global.setTimeout(function () { if (!w.ready && !w.destroyed && w.iframe === f) report(new Error("form did not load"), { slug: w.slug, kind: "load" }); }, 15000);
     return f;
   }
 
@@ -463,6 +526,12 @@
     if (g("mode")) o.mode = g("mode");
     if (g("button-text")) o.buttonText = g("button-text");
     if (g("base-url")) o.baseUrl = g("base-url");
+    if (g("locale") || g("lang")) o.locale = g("locale") || g("lang");
+    if (g("consent")) o.consent = g("consent");
+    if (g("skippable") === "true") o.skippable = true;
+    if (g("return-url")) o.returnUrl = g("return-url");
+    if (g("atlas-token")) o.atlasToken = g("atlas-token");
+    if (g("test") === "true") o.test = true;
     if (g("pass-query-params") === "true") o.passQueryParams = true;
     if (g("transitive-search-params") === "true") o.transitiveSearchParams = true;
     if (g("prefill-from-url") === "true") o.prefillFromUrl = true;
@@ -587,6 +656,8 @@
     open: open,
     close: close,
     createWidget: createWidget,
+    /** Tell every form frame whether the visitor accepted statistics: setConsent({statistics: true|false}). Until a grant, forwarded events are held; a decline drops them. */
+    setConsent: function (c) { hostConsent = toState(c); pushAll(); },
     identify: function (userId, attributes) {
       sv.userId = userId == null ? null : String(userId);
       sv.attrs = merge(attributes || {});
@@ -596,13 +667,27 @@
       opts = opts || {};
       var base = (opts.baseUrl || defaults.baseUrl).replace(/\/$/, "");
       var body = { entry: opts.entry, uid: opts.uid, uid_sig: opts.uidSignature, attributes: opts.attributes || {} };
+      if (opts.atlasToken) body.atlas_token = opts.atlasToken;
+      if (opts.test) body.test = true;
       identity(opts).forEach(function (kv) { if (kv[0] === "ph_session" || kv[0] === "ph_distinct") body[kv[0]] = kv[1]; });
       var ctl = typeof AbortController === "function" ? new AbortController() : null;
       var t = ctl ? setTimeout(function () { ctl.abort(); }, opts.timeoutMs || 8000) : null;
       return fetch(base + "/api/v1/public/onboarding/decide", { method: "POST", credentials: "omit", mode: "cors", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: ctl ? ctl.signal : undefined })
         .then(function (r) { if (!r.ok) throw new Error("decide " + r.status); return r.json(); })
         .then(function (j) { return j && j.data ? j.data : j; })
-        .then(function (d) { if (t) clearTimeout(t); return d; }, function (e) { if (t) clearTimeout(t); throw e; });
+        .then(function (d) { if (t) clearTimeout(t); return d; }, function (e) { if (t) clearTimeout(t); report(e, { kind: "decide", entry: opts.entry }); throw e; });
+    },
+    /** Report a goal for a signed-in person, no secret key: convert("tool_run", { entry, uid, uidSignature, eventId }). Resolves the response data; rejects on errors. */
+    convert: function (event, opts) {
+      opts = opts || {};
+      var base = (opts.baseUrl || defaults.baseUrl).replace(/\/$/, "");
+      var body = { uid: opts.uid, uid_sig: opts.uidSignature, event: event, eventId: opts.eventId };
+      if (opts.atlasToken) body.atlas_token = opts.atlasToken;
+      if (opts.test) body.test = true;
+      return fetch(base + "/api/v1/public/experiments/" + encodeURIComponent(opts.entry) + "/conversions", { method: "POST", credentials: "omit", mode: "cors", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+        .then(function (r) { if (!r.ok) throw new Error("convert " + r.status); return r.json(); })
+        .then(function (j) { return j && j.data ? j.data : j; })
+        .catch(function (e) { report(e, { kind: "convert", entry: opts.entry }); throw e; });
     },
     track: function (event) {
       if (!sv.rules) { sv.firedEvents[event] = true; return; }
